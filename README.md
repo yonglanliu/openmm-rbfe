@@ -67,10 +67,6 @@ import openmm as mm
 print([mm.Platform.getPlatform(i).getName() for i in range(mm.Platform.getNumPlatforms())])
 PY
 ```
-### Pip-only install (fallback)
-If you cannot use conda, you can try pip. Note:
-* GPU/CUDA OpenMM is strongly recommended via conda on HPC
-* pip is best for pure-python dependencies and local CPU workflows.
 
 ## Run: Absolute hydration free energy (ΔG_hyd)
 Prepare input ligands:
