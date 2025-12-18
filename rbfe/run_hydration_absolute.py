@@ -1,3 +1,56 @@
+"""
+Author: Yonglan Liu
+Created: 2025-12
+Project: OpenMM-based Free Energy Pipeline (Absolute Hydration)
+
+What this script does
+---------------------
+This module computes *absolute hydration free energies* (ΔG_hyd) for small
+molecules using OpenMM + openmmtools alchemy + MBAR (PyMBAR).
+
+It is designed as a reproducible, pipeline-friendly entry point that:
+  1) builds a solvated ligand system (GAFF + AMBER TIP3P),
+  2) constructs an alchemical system via AbsoluteAlchemicalFactory,
+  3) runs a two-stage decoupling schedule (electrostatics -> sterics),
+  4) evaluates reduced potentials u_kln for all states (k,l,n),
+  5) estimates ΔG and uncertainty using MBAR, and
+  6) writes per-seed results and QC artifacts (CSV + plots).
+
+Why hydration free energy?
+--------------------------
+Hydration free energy is a standard benchmark for validating:
+  - force field choices (e.g., GAFF/SMIRNOFF),
+  - alchemical protocol correctness (lambda naming, PME treatment),
+  - numerical stability (NaNs, bad contacts),
+  - sampling quality and overlap (MBAR diagnostics, seed sensitivity).
+
+This is a recommended calibration step before running protein–ligand binding
+free energies (absolute or relative).
+
+Design principles
+-----------------
+- Reproducibility-first:
+  Key parameters (schedule, temperature, friction, timestep, platform, seed,
+  sampling lengths) are configurable and recorded to disk.
+- Clear separation of concerns:
+  system build -> relaxation -> alchemical sampling -> estimator -> QC output
+- QC transparency:
+  Window-wise ΔG contributions and cumulative curves are exported for quick
+  diagnostics.
+
+Typical outputs
+---------------
+- results/hydration_abs/<ligand>/seed<seed>/hydration_result.json
+- results/qc/<ligand>_seed<seed>_mbar_qc.csv
+- results/qc/<ligand>_seed<seed>_mbar_qc.png
+- results/qc/<ligand>_seed<seed>_mbar_qc_cum.png
+- results/ddg_summary_repeats.csv (if main() runs multiple seeds)
+
+Run
+---
+    python run_hydration_absolute.py
+"""
+
 import os
 import json
 import numpy as np
@@ -19,8 +72,8 @@ from pymbar import MBAR
 # -----------------------------
 #          Ligand prep
 # -----------------------------
-def _rdkit_embed_sdf(in_sdf: str, out_sdf: str) -> None:
-    """Ensure ligand has 3D coords; write a new SDF with Hs + 3D."""
+def _rdkit_embed_sdf(in_sdf: str, out_sdf: str, random_seed: int = 2025) -> None:
+    """Ensure ligand has 3D coords; write a new SDF with explicit H + 3D."""
     suppl = Chem.SDMolSupplier(in_sdf, removeHs=False)
     m = suppl[0]
     if m is None:
@@ -28,7 +81,7 @@ def _rdkit_embed_sdf(in_sdf: str, out_sdf: str) -> None:
 
     m = Chem.AddHs(m, addCoords=True)
     if m.GetNumConformers() == 0:
-        AllChem.EmbedMolecule(m, randomSeed=2025)
+        AllChem.EmbedMolecule(m, randomSeed=int(random_seed))
     AllChem.UFFOptimizeMolecule(m)
 
     w = Chem.SDWriter(out_sdf)
@@ -39,16 +92,18 @@ def _rdkit_embed_sdf(in_sdf: str, out_sdf: str) -> None:
 # ---------------------------------
 # System build (GAFF + AMBER TIP3P)
 # ---------------------------------
-def build_solvated_system(ligand_sdf: str, padding_nm: float = 1.2):
+def build_solvated_system(ligand_sdf: str, padding_nm: float = 1.2, tmp_sdf: str | None = None):
     """
     Build solvated OpenMM System+Topology+Positions for a single ligand
-    using GAFF (via AmberTools) + AMBER TIP3P water (stable baseline).
+    using GAFF (via AmberTools) + AMBER TIP3P water.
+
+    Returns: (system, topology, positions)
     """
-    tmp_sdf = ligand_sdf.replace(".sdf", ".3d.sdf")
+    if tmp_sdf is None:
+        tmp_sdf = ligand_sdf.replace(".sdf", ".3d.sdf")
     _rdkit_embed_sdf(ligand_sdf, tmp_sdf)
 
     offmol = Molecule.from_file(tmp_sdf)
-
     lig_top = offmol.to_topology().to_openmm()
     positions = offmol.conformers[0].to_openmm()
 
@@ -85,9 +140,7 @@ def get_ligand_atom_indices(topology: app.Topology) -> list[int]:
 # Alchemical system (openmmtools 0.25.3 compatible)
 # -------------------------------------------------
 def alchemical_system(reference_system: mm.System, alchemical_atoms: list[int]) -> mm.System:
-    """
-    Build alchemical system using openmmtools AbsoluteAlchemicalFactory (0.25.3 style).
-    """
+    """Build alchemical system using openmmtools AbsoluteAlchemicalFactory (0.25.3 style)."""
     from openmmtools import alchemy
 
     region = AlchemicalRegion(alchemical_atoms=alchemical_atoms)
@@ -100,7 +153,7 @@ def alchemical_system(reference_system: mm.System, alchemical_atoms: list[int]) 
     alch_system = factory.create_alchemical_system(
         reference_system=reference_system,
         alchemical_regions=region,
-        alchemical_regions_interactions=frozenset(),  # critical for 0.25.3
+        alchemical_regions_interactions=frozenset(),
     )
     return alch_system
 
@@ -109,10 +162,7 @@ def alchemical_system(reference_system: mm.System, alchemical_atoms: list[int]) 
 # Utilities: lambda parameters
 # -----------------------------
 def _lambda_param_names(system: mm.System) -> list[str]:
-    """
-    Return names of global parameters that look like lambda parameters.
-    In OpenMM, global parameters live on Forces.
-    """
+    """Return names of global parameters that look like lambda parameters."""
     names = set()
     for fi in range(system.getNumForces()):
         f = system.getForce(fi)
@@ -126,18 +176,19 @@ def _lambda_param_names(system: mm.System) -> list[str]:
 
 def make_decouple_schedule(n_elec: int = 6, n_vdw: int = 12):
     """
-    Two-stage decoupling:
-      Stage 1: turn off electrostatics (sterics=1)
-      Stage 2: turn off sterics (electrostatics=0)
+    Two-stage decoupling schedule:
+      Stage 1: lambda_electrostatics 1 -> 0 with lambda_sterics = 1
+      Stage 2: lambda_sterics       1 -> 0 with lambda_electrostatics = 0
+
     Returns list of (lambda_electrostatics, lambda_sterics).
     """
-    elec = np.linspace(1.0, 0.0, n_elec)  # 1 -> 0
-    vdw = np.linspace(1.0, 0.0, n_vdw)    # 1 -> 0
+    elec = np.linspace(1.0, 0.0, n_elec)
+    vdw = np.linspace(1.0, 0.0, n_vdw)
 
-    schedule = []
+    schedule: list[tuple[float, float]] = []
     for le in elec:
         schedule.append((float(le), 1.0))
-    for ls in vdw[1:]:  # skip duplicate (0,1)
+    for ls in vdw[1:]:
         schedule.append((0.0, float(ls)))
     return schedule
 
@@ -155,10 +206,7 @@ def relax_reference_system(
     minimize_max_iter: int = 5000,
     nsteps_warm: int = 2000,
 ) -> tuple:
-    """
-    Minimize + short warmup on the NON-alchemical reference system.
-    Returns (positions, velocities) to seed alchemical simulations.
-    """
+    """Minimize + short warmup on the NON-alchemical reference system."""
     temperature = temperature_k * unit.kelvin
     integrator = mm.LangevinMiddleIntegrator(
         temperature,
@@ -180,9 +228,8 @@ def relax_reference_system(
         f"DEBUG ref post-minimize: E(kJ/mol)={E:.3f}  pos_finite={np.isfinite(pos_nm).all()}  "
         f"max|pos|={np.max(np.abs(pos_nm)):.3f} nm"
     )
-
     if not np.isfinite(pos_nm).all():
-        raise RuntimeError("Reference system has non-finite positions after minimization (bad initial geometry).")
+        raise RuntimeError("Reference system has non-finite positions after minimization.")
 
     context.setVelocitiesToTemperature(temperature)
     integrator.step(nsteps_warm)
@@ -209,10 +256,9 @@ def run_lambda_windows_mbar(
     random_seed: int = 2025,
 ):
     """
-    Stable MBAR:
-      - 1 sampling context (integrates at state k)
-      - 1 eval context (no integration; set state l and evaluate energies)
-    schedule: list of (lambda_electrostatics, lambda_sterics)
+    Stable MBAR collection:
+      - sampling context integrates at state k
+      - eval context re-evaluates energies at all states l for each sampled frame
     """
     temperature = temperature_k * unit.kelvin
     kT = (unit.MOLAR_GAS_CONSTANT_R * temperature).value_in_unit(unit.kilojoule_per_mole)
@@ -223,15 +269,13 @@ def run_lambda_windows_mbar(
     print("DEBUG lambda params:", lambda_names)
 
     if "lambda_electrostatics" not in lambda_names or "lambda_sterics" not in lambda_names:
-        raise RuntimeError(
-            f"Expected lambda_electrostatics & lambda_sterics, got: {lambda_names}"
-        )
+        raise RuntimeError(f"Expected lambda_electrostatics & lambda_sterics, got: {lambda_names}")
 
     integ_s = mm.LangevinMiddleIntegrator(
         temperature, friction_per_ps / unit.picosecond, step_fs * unit.femtosecond
     )
     integ_s.setConstraintTolerance(1e-6)
-    integ_s.setRandomNumberSeed(random_seed)
+    integ_s.setRandomNumberSeed(int(random_seed))
 
     ctx_s = mm.Context(alch_system, integ_s, platform)
     ctx_s.setPositions(positions)
@@ -252,7 +296,6 @@ def run_lambda_windows_mbar(
     n_samples = max(1, nsteps_prod_each // sample_interval)
     u_kln = np.zeros((K, K, n_samples), dtype=float)
 
-    # Minimize once at initial state
     le0, ls0 = schedule[0]
     set_state(ctx_s, le0, ls0)
     mm.LocalEnergyMinimizer.minimize(ctx_s, maxIterations=2000)
@@ -296,56 +339,68 @@ def compute_deltaG_from_mbar(u_kln, N_k, kT_kJ_per_mol: float):
     dG_err = float(dDelta_f[i, j] * kT_kJ_per_mol)
     return dG, dG_err
 
+
 def save_mbar_qc(u_kln, N_k, kT_kJ_per_mol: float, schedule, out_prefix: str):
     """
     Save minimal QC from MBAR:
       - Adjacent ΔG_i->i+1 and uncertainties
       - Cumulative ΔG from state0 to state i
-      - Plot both vs window index
     Outputs:
       {out_prefix}_mbar_qc.csv
       {out_prefix}_mbar_qc.png
+      {out_prefix}_mbar_qc_cum.png
     """
-    import os
     import matplotlib.pyplot as plt
 
     mbar = MBAR(u_kln, N_k, verbose=False)
     res = mbar.compute_free_energy_differences()
-    Delta_f = res["Delta_f"]     # dimensionless
-    dDelta_f = res["dDelta_f"]   # dimensionless uncertainty
+    Delta_f = res["Delta_f"]
+    dDelta_f = res["dDelta_f"]
 
     K = u_kln.shape[0]
 
-    # Adjacent increments
-    dG_adj = []
-    dG_adj_err = []
-    for i in range(K - 1):
-        df = Delta_f[i, i + 1]
-        ddf = dDelta_f[i, i + 1]
-        dG_adj.append(df * kT_kJ_per_mol)
-        dG_adj_err.append(ddf * kT_kJ_per_mol)
+    dG_adj = np.array([Delta_f[i, i + 1] * kT_kJ_per_mol for i in range(K - 1)], dtype=float)
+    dG_adj_err = np.array([dDelta_f[i, i + 1] * kT_kJ_per_mol for i in range(K - 1)], dtype=float)
 
-    dG_adj = np.array(dG_adj, dtype=float)
-    dG_adj_err = np.array(dG_adj_err, dtype=float)
-
-    # Cumulative ΔG from 0 to i (using MBAR direct Δf_0i, not summing adjacents)
     dG_cum = np.array([Delta_f[0, i] * kT_kJ_per_mol for i in range(K)], dtype=float)
     dG_cum_err = np.array([dDelta_f[0, i] * kT_kJ_per_mol for i in range(K)], dtype=float)
 
-    # Save CSV
     os.makedirs(os.path.dirname(out_prefix), exist_ok=True)
     csv_path = f"{out_prefix}_mbar_qc.csv"
+
+    header = [
+        "i",
+        "le_i", "ls_i",
+        "le_ip1", "ls_ip1",
+        "dG_adj_kJmol", "dG_adj_err_kJmol",
+        "dG_cum_to_i_kJmol", "dG_cum_err_to_i_kJmol",
+    ]
+
     with open(csv_path, "w") as f:
-        f.write("i,le_i,ls_i,le_ip1,ls_ip1,dG_adj_kJmol,dG_adj_err_kJmol,dG_cum_to_i_kJmol,dG_cum_err_to_i_kJmol\n")
+        f.write(",".join(header) + "\n")
         for i in range(K):
             le_i, ls_i = schedule[i]
             if i < K - 1:
                 le_j, ls_j = schedule[i + 1]
-                f.write(f"{i},{le_i:.6f},{ls_i:.6f},{le_j:.6f},{ls_j:.6f},{dG_adj[i]:.6f},{dG_adj_err[i]:.6f},{dG_cum[i]:.6f},{dG_cum_err[i]:.6f}\n")
+                row = [
+                    i,
+                    f"{le_i:.6f}", f"{ls_i:.6f}",
+                    f"{le_j:.6f}", f"{ls_j:.6f}",
+                    f"{dG_adj[i]:.6f}", f"{dG_adj_err[i]:.6f}",
+                    f"{dG_cum[i]:.6f}", f"{dG_cum_err[i]:.6f}",
+                ]
             else:
-                f.write(f"{i},{le_i:.6f},{ls_i:.6f},,,,{dG_cum[i]:.6f},{dG_cum_err[i]:.6f}\n")
+                # last state has no adjacent (i->i+1)
+                row = [
+                    i,
+                    f"{le_i:.6f}", f"{ls_i:.6f}",
+                    "", "",
+                    "", "",
+                    f"{dG_cum[i]:.6f}", f"{dG_cum_err[i]:.6f}",
+                ]
+            f.write(",".join(map(str, row)) + "\n")
 
-    # Plot
+    # plots
     png_path = f"{out_prefix}_mbar_qc.png"
     x_adj = np.arange(K - 1)
     x_cum = np.arange(K)
@@ -359,17 +414,18 @@ def save_mbar_qc(u_kln, N_k, kT_kJ_per_mol: float, schedule, out_prefix: str):
     plt.savefig(png_path, dpi=200)
     plt.close()
 
+    cum_path = f"{out_prefix}_mbar_qc_cum.png"
     plt.figure()
     plt.errorbar(x_cum, dG_cum, yerr=dG_cum_err, fmt="o")
     plt.xlabel("Window index i (state 0 → i)")
     plt.ylabel("Cumulative ΔG (kJ/mol)")
     plt.title("MBAR cumulative free energy")
     plt.tight_layout()
-    plt.savefig(png_path.replace(".png", "_cum.png"), dpi=200)
+    plt.savefig(cum_path, dpi=200)
     plt.close()
 
-    print(f"Wrote QC CSV: {csv_path}")
-    print(f"Wrote QC plots: {png_path} and {png_path.replace('.png','_cum.png')}")
+    print(f"Wrote QC CSV:   {csv_path}")
+    print(f"Wrote QC plots: {png_path} and {cum_path}")
 
 
 # -----------------------------
@@ -382,65 +438,71 @@ def run_one_ligand(
     schedule: list[tuple[float, float]] | None = None,
     random_seed: int = 2025,
     do_qc: bool = True,
+    # runtime knobs
+    friction_per_ps: float = 20.0,
+    step_fs: float = 0.25,
+    nsteps_eq_each: int = 1500,
+    nsteps_prod_each: int = 3000,
+    sample_interval: int = 200,
 ):
     if schedule is None:
         schedule = make_decouple_schedule(n_elec=6, n_vdw=12)
 
-    ref_system, topology, positions = build_solvated_system(ligand_sdf)
+    # make a tmp 3D sdf under outdir to avoid collisions
+    os.makedirs(outdir, exist_ok=True)
+    lig_base = os.path.splitext(os.path.basename(ligand_sdf))[0]
+    tmp_sdf = os.path.join(outdir, f"{lig_base}.3d.sdf")
+    ref_system, topology, positions = build_solvated_system(ligand_sdf, tmp_sdf=tmp_sdf)
+
     lig_atoms = get_ligand_atom_indices(topology)
 
-    # 1) relax on reference system
-    pos_relaxed, vel_relaxed = relax_reference_system(
-        ref_system, positions, platform_name=platform
-    )
+    pos_relaxed, vel_relaxed = relax_reference_system(ref_system, positions, platform_name=platform)
 
-    # 2) build alchemical system
     alch_sys = alchemical_system(ref_system, lig_atoms)
 
-    # 3) run MBAR sampling (seed controls Langevin noise)
     u_kln, N_k, kT = run_lambda_windows_mbar(
         alch_sys,
         pos_relaxed,
         vel_relaxed,
         schedule=schedule,
         platform_name=platform,
-        random_seed=random_seed,   # <-- 关键：传 seed
-        friction_per_ps=20.0,
-        step_fs=0.25,
-        nsteps_eq_each=1500,
-        nsteps_prod_each=3000,
-        sample_interval=200,
+        random_seed=random_seed,
+        friction_per_ps=friction_per_ps,
+        step_fs=step_fs,
+        nsteps_eq_each=nsteps_eq_each,
+        nsteps_prod_each=nsteps_prod_each,
+        sample_interval=sample_interval,
     )
 
-    # 4) final ΔG between first and last state
     dG_kJ, dG_err_kJ = compute_deltaG_from_mbar(u_kln, N_k, kT)
 
-    # 5) write per-seed result JSON (avoid overwrite)
     outdir_seed = os.path.join(outdir, f"seed{random_seed}")
     os.makedirs(outdir_seed, exist_ok=True)
-    with open(os.path.join(outdir_seed, "hydration_result.json"), "w") as f:
-        json.dump(
-            {
-                "ligand_sdf": ligand_sdf,
-                "dG_hyd_kJmol": float(dG_kJ),
-                "dG_sem_kJmol": float(dG_err_kJ),
-                "schedule": schedule,
-                "n_samples_per_state": int(N_k[0]),
-                "random_seed": int(random_seed),
-            },
-            f,
-            indent=2,
-        )
 
-    # 6) QC output per seed (CSV + plots)
+    result = {
+        "ligand_sdf": ligand_sdf,
+        "dG_hyd_kJmol": float(dG_kJ),
+        "dG_sem_kJmol": float(dG_err_kJ),
+        "schedule": schedule,
+        "n_samples_per_state": int(N_k[0]),
+        "random_seed": int(random_seed),
+        "platform": platform,
+        "temperature_K": 300.0,
+        "friction_per_ps": float(friction_per_ps),
+        "step_fs": float(step_fs),
+        "nsteps_eq_each": int(nsteps_eq_each),
+        "nsteps_prod_each": int(nsteps_prod_each),
+        "sample_interval": int(sample_interval),
+    }
+
+    with open(os.path.join(outdir_seed, "hydration_result.json"), "w") as f:
+        json.dump(result, f, indent=2)
+
     if do_qc:
         qc_dir = os.path.join("results", "qc")
         os.makedirs(qc_dir, exist_ok=True)
-
-        # name like: results/qc/ligA_seed2025
         lig_tag = os.path.basename(outdir.rstrip("/"))
         qc_prefix = os.path.join(qc_dir, f"{lig_tag}_seed{random_seed}")
-
         save_mbar_qc(u_kln, N_k, kT, schedule, qc_prefix)
 
     return dG_kJ, dG_err_kJ
@@ -466,15 +528,13 @@ def main():
         dG_B, sem_B = run_one_ligand(ligB, outB, platform="CPU", random_seed=seed)
 
         ddG = dG_B - dG_A
-        ddG_sem = (sem_A**2 + sem_B**2) ** 0.5
-
+        ddG_sem = float(np.sqrt(sem_A**2 + sem_B**2))
         rows.append((seed, dG_A, sem_A, dG_B, sem_B, ddG, ddG_sem))
 
         print(f"ΔG_hyd(A) = {dG_A:.3f} ± {sem_A:.3f} kJ/mol")
         print(f"ΔG_hyd(B) = {dG_B:.3f} ± {sem_B:.3f} kJ/mol")
         print(f"ΔΔG_hyd(B-A) = {ddG:.3f} ± {ddG_sem:.3f} kJ/mol")
 
-    # summarize repeats
     ddGs = np.array([r[5] for r in rows], dtype=float)
     mean = float(ddGs.mean())
     std = float(ddGs.std(ddof=1)) if len(ddGs) > 1 else 0.0
@@ -495,8 +555,6 @@ def main():
     print(f"ΔΔG std  = {std:.3f} kJ/mol")
     print(f"ΔΔG SEM  = {sem:.3f} kJ/mol")
     print(f"Wrote: {out_csv}")
-
-
 
 
 if __name__ == "__main__":

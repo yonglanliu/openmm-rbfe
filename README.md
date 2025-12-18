@@ -1,23 +1,47 @@
-# openmm-rbfe
-Open-source RBFE (free energy perturbation FEP) using OpenMM, perses, and OpenFF for small molecule drug discovery
+# OpenMM-based Absolute Free Energy Pipeline
 
-# OpenMM RBFE Side Project
+This repository implements a **reproducible absolute free energy (AFE) pipeline**
+based on **OpenMM**, **openmmtools**, and **MBAR**, supporting:
 
-This repository contains a project focused on building an open-source relative binding free energy (RBFE) workflow for small-molecule
-drug discovery using OpenMM, perses, and OpenFF.
+- Absolute hydration free energies (ΔG_hyd)
+- Absolute protein–ligand complex decoupling
+- Multi-seed uncertainty estimation
+- MBAR-based QC and λ-space diagnostics
+- Visualization dashboard (Streamlit)
 
-## Project Goal
-To benchmark RBFE (FEP) predictions on a congeneric ligand series against public experimental binding affinity data and to establish quality-control criteria for identifying reliable and unreliable free energy estimates.
+---
 
-## Methods
-- Molecular dynamics: OpenMM
-- Alchemical free energy: perses
-- Small-molecule force field: OpenFF
-- Analysis: MBAR (pymbar), MDTraj, RDKit
+## Why this repository exists
 
-## Planned Deliverables
-- Reproducible RBFE workflow (protein + ligand transformations)
-- ΔΔG ranking and comparison with experimental data
-- Analysis of convergence, uncertainty, and failure cases
-- Decision-oriented summary for medicinal chemistry prioritization
+Absolute hydration free energy is a **canonical benchmark** for validating:
+- force fields (GAFF / AMBER),
+- alchemical protocols,
+- λ schedules,
+- sampling stability and uncertainty.
 
+This pipeline is designed as a **calibration + validation step**
+before running **absolute binding free energies**.
+
+---
+
+## Repository structure
+
+openmm-rbfe/
+├── rbfe/ # core simulation scripts
+│ ├── run_hydration_absolute.py
+│ ├── run_complex_absolute.py
+│
+├── tools/ # protein & ligand preprocessing
+├── viz/ # Streamlit visualization app
+├── env/ # conda environment
+├── data/ # input data (examples only)
+├── results/ # (ignored) simulation outputs
+
+
+---
+
+## Environment setup
+
+```bash
+conda env create -f env/environment.yml
+conda activate rbfe
