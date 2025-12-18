@@ -221,11 +221,11 @@ def alchemical_system(reference_system: mm.System, alchemical_atoms: list[int]) 
 def _positions_to_numpy_nm(positions) -> np.ndarray:
     return np.asarray(positions.value_in_unit(unit.nanometer), dtype=float)
 
-
+# Get potential energy from context in kJ/mol
 def _context_energy_kjmol(context: mm.Context) -> float:
     return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
 
-
+# Robust reference system relax
 def relax_reference_system_robust(
     system: mm.System,
     positions,
@@ -246,7 +246,7 @@ def relax_reference_system_robust(
       4) short warmup
     Returns (positions, velocities)
     """
-    # pre-check
+    # pre-check：if positions are finite orginally
     pos_nm = _positions_to_numpy_nm(positions)
     print("DEBUG pre-min pos finite:", np.isfinite(pos_nm).all(), "max|pos|:", float(np.max(np.abs(pos_nm))))
     if not np.isfinite(pos_nm).all():
@@ -660,11 +660,11 @@ def run_one_complex(
 
 def main():
     # ---- EDIT THESE 3 ----
-    complex_pdb = "data/protein/4w52_fixed_keepBNZ.pdb"
-    ligand_sdf = "data/ligands/BNZ.sdf"
-    ligand_resname = "BNZ"
+    complex_pdb = "data/protein/4w53_fixed_keepMBN.pdb"
+    ligand_sdf = "data/ligands/MBN.sdf"
+    ligand_resname = "MBN"
 
-    outdir = "results/complex_abs/BNZ"
+    outdir = "results/complex_abs/MBN"
     seeds = [2025, 2026, 2027]
     schedule = make_decouple_schedule(n_elec=6, n_vdw=12)
 
@@ -703,7 +703,7 @@ def main():
     sem = float(std / np.sqrt(len(dGs))) if len(dGs) > 1 else 0.0
 
     os.makedirs("results", exist_ok=True)
-    out_csv = "results/complex_summary_repeats.csv"
+    out_csv = f"results/complex_summary_repeats.csv"
     with open(out_csv, "w") as f:
         f.write("seed,dG_complex_kJmol,sem_kJmol\n")
         for seed, dG, s in rows:

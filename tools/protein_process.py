@@ -1,3 +1,54 @@
+"""
+Author: Yonglan Liu
+Created: 2025-12
+Project: OpenMM-based Free Energy Pipeline (Absolute Hydration)
+"""
+"""
+This utility cleans and standardizes a protein–ligand PDB for downstream MD/FEP workflows:
+* Fixes common PDB issues with PDBFixer (nonstandard residues, missing atoms, hydrogens).
+* Keeps only the specified ligand by residue name (--keep_resname).
+* Removes all other heterogens robustly (waters/ions optional).
+* Optionally restricts ligand selection by chain and/or residue id to avoid keeping the wrong copy when multiple ligands exist.
+"""
+"""
+Usage example:
+python tools/fix_pdb_keep_ligand.py \
+        -i data/pdb/[PDBid].pdb \
+        -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
+        --keep_resname [ligand Resname] \
+  
+Choose the correct ligand when multiple copies exist:
+python tools/fix_pdb_keep_ligand.py \
+        -i data/pdb/[PDBid].pdb \
+        -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
+        --keep_resname [ligand Resname] \
+        --keep_chain [chain id] \
+        --keep_resid [residue id]
+
+Keep waters and/or common ions:
+By default, crystallographic waters and common ions are removed. Use flags to keep them:
+# Keep waters:
+python tools/fix_pdb_keep_ligand.py \
+      -i data/pdb/[PDBid].pdb \
+      -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
+      --keep_resname [ligand Resname] \
+      --keep_water
+
+# Keep ions:
+python tools/fix_pdb_keep_ligand.py \
+      -i data/pdb/[PDBid].pdb \
+      -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
+      --keep_resname [ligand Resname] \
+      --keep_ions
+
+# Keep both waters and ions:
+python tools/fix_pdb_keep_ligand.py \
+      -i data/pdb/[PDBid].pdb \
+      -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
+        --keep_resname [ligand Resname] \
+        --keep_water \
+        --keep_ions
+"""
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -24,7 +75,7 @@ STANDARD_AA = {
     "ACE","NME"
 }
 
-# 若你遇到 DNA/RNA，可把这类加进去（默认先不保留，以免误保留杂质）
+# if there are DNA/RNA, you can add them here (default is not to keep, to avoid accidental inclusion of unwanted components)
 STANDARD_NA = {
     "DA","DT","DG","DC","A","U","G","C","I"
 }
@@ -87,8 +138,7 @@ def main():
     filtered = {}
     for key, missing_list in fixer.missingResidues.items():
         chain_idx, anchor_resid = key
-        # 只要缺失段发生在链的两端附近，就认为是 terminal missing，丢掉
-        # （anchor_resid 在已存在范围之外/紧贴边界，通常就是 terminal gap）
+        # if the missing segment is near terminal, consider it terminal missing and drop it
         if chain_idx in chain_min and chain_idx in chain_max:
             if anchor_resid <= chain_min[chain_idx] or anchor_resid >= chain_max[chain_idx]:
                 continue  # drop terminal missing residues
@@ -102,9 +152,9 @@ def main():
 
     modeller = Modeller(fixer.topology, fixer.positions)
 
-    # -----------------------
-    # 2) 找 ligand（同 resname 可能有多个）
-    # -----------------------
+    # -------------------------------------------------------------------
+    # 2) search ligand (there might be several ligands with same resname)
+    # -------------------------------------------------------------------
     lig_matches = [res for res in modeller.topology.residues() if res.name.upper() == keep_resname]
     if len(lig_matches) == 0:
         raise RuntimeError(
@@ -112,7 +162,7 @@ def main():
             f"Please check HETATM lines in the input PDB."
         )
 
-    # 选择要保留的 ligand（默认只保留一个，避免 FEP 误 alchemize 两个）
+    # Only keep only one ligand to avoid FEP alchemizing two by mistake
     def match_filter(res):
         if args.keep_chain is not None and res.chain.id != args.keep_chain:
             return False
@@ -134,56 +184,56 @@ def main():
     keep_lig_set = set(keep_ligs)
 
     # -----------------------
-    # 3) 构建删除列表：删水、离子、以及所有“非标准蛋白/核酸/保留ligand”
+    # 3) construct delete list: delete water, ions, and all "non-standard protein/nucleic acid/kept ligand"
     # -----------------------
     delete_res = []
     for res in modeller.topology.residues():
         name = res.name.upper()
 
-        # 保留目标 ligand（指定那一个/些）
+        # keep the target ligand (specified one or more)
         if name == keep_resname and res in keep_lig_set:
             continue
 
-        # 删同 resname 的其它 ligand 副本
+        # delete other ligands with same resname
         if name == keep_resname and res not in keep_lig_set:
             delete_res.append(res)
             continue
 
-        # 水
+        # water
         if name in WATER_NAMES:
             if not args.keep_water:
                 delete_res.append(res)
             continue
 
-        # 离子
+        # ions
         if name in COMMON_IONS:
             if not args.keep_ions:
                 delete_res.append(res)
             continue
 
-        # 标准蛋白残基：保留
+        # standard protein residues: keep
         if name in STANDARD_AA:
             continue
 
-        # 核酸：按需保留
+        # nucleic acids: keep if requested
         if args.keep_nucleic_acids and name in STANDARD_NA:
             continue
 
-        # 其它全删（这一步就是“真正干净”的关键）
+        # delete other heterogens (this is the key step for "clean" PDB)
         delete_res.append(res)
 
     if delete_res:
         modeller.delete(delete_res)
 
     # -----------------------
-    # 4) 写出
+    # 4) write output PDB
     # -----------------------
     with open(args.out_pdb, "w") as f:
         PDBFile.writeFile(modeller.topology, modeller.positions, f, keepIds=True)
 
-    # -----------------------
-    # 5) 打印 summary（你可以用它确认删干净了）
-    # -----------------------
+    # --------------------------------------------------------------
+    # 5) print summary (you can use it to confirm deletion is clean)
+    # --------------------------------------------------------------
     kept_after = [(r.name, r.chain.id, _rid(r)) for r in modeller.topology.residues() if r.name.upper() == keep_resname]
     other_het_after = []
     for r in modeller.topology.residues():

@@ -42,27 +42,64 @@ openmm-rbfe/
 
 ## Environment setup
 
+### Local (macOS / CPU)
 ```bash
+# from repo root
 conda env create -f env/environment.yml
 conda activate rbfe
+
+python -c "import openmm; print('OpenMM OK')"
 ```
 ---
+### HPC (GPU/CUDA)
+```bash
+# Use conda environment
+git clone https://github.com/yonglanliu/openmm-rbfe.git
+cd openmm-rbfe
 
-## Running hydration free energy
----
+# Create env
+conda env create -f env/environment.yml
+conda activate rbfe
+
+# verify OpenMM platforms (should include CUDA on GPU node)
+python - << 'PY'
+import openmm as mm
+print([mm.Platform.getPlatform(i).getName() for i in range(mm.Platform.getNumPlatforms())])
+PY
+```
+### Pip-only install (fallback)
+If you cannot use conda, you can try pip. Note:
+* GPU/CUDA OpenMM is strongly recommended via conda on HPC
+* pip is best for pure-python dependencies and local CPU workflows.
+
+## Run: Absolute hydration free energy (ΔG_hyd)
+Prepare input ligands:
+Put ligand SDF files under data/ligands/
+Update the ligand paths in rbfe/run_hydration_absolute.py (or use CLI if enabled)
+Run:
 ```bash
 python rbfe/run_hydration_absolute.py
 ```
+Ouputs (typical):
+* results/hydration_abs/<ligand>/seedXXXX/hydration_result.json
+* results/qc/<ligand>_seedXXXX_mbar_qc.csv
+* results/qc/<ligand>_seedXXXX_mbar_qc.png (+ cumulative plot)
 ---
 
-Outputs per-seed results and MBAR QC plots under:
----
-```bash
-results/hydration_abs/
-results/qc/
-```
-## Running complex absolute free energy
----
+## Run: Absolute complex decoupling (ΔG_complex)
+Inputs:
+* Protein PDB (processed; missing atoms fixed; keep desired ligand via resname)
+* Ligand SDF file that matches the ligand in the PDB (same chemistry)
+Run:
 ```bash
 python rbfe/run_complex_absolute.py
 ```
+Outputs (typical):
+* results/complex_abs/<target>/<ligand>/seedXXXX/complex_result.json
+* QC CSV/plots under results/qc/
+
+### Minimal QC: What to check
+Recommended quick checks:
+* MBAR adjacent ΔG contributions: no single window dominates unexpectedly
+* Cumulative ΔG curve: should be reasonably smooth
+* Multi-seed repeatability: seed-to-seed std should be small relative to target precision

@@ -7,8 +7,8 @@ __pycache__/
 # Conda / venv
 .env
 .venv
-env/
 *.egg-info/
+。vscode/
 
 # Results & outputs
 results/

@@ -1,3 +1,20 @@
+"""Author: Yonglan Liu
+Created: 2025-12
+Project: OpenMM-based Free Energy Pipeline (Absolute Hydration)
+"""
+"""
+This utility extracts the ligand 3D coordinates from a protein–ligand complex PDB and writes an SDF with correct chemistry (bond orders, valence, explicit H) using RDKit.
+Typical use case:
+You have a cleaned complex PDB (e.g., from fix_pdb_keep_ligand.py),
+You want a ligand SDF that preserves the pose from the PDB while restoring chemical connectivity from a trusted SMILES.
+"""
+"""
+python extract_ligand_pose_to_sdf.py \
+  -i cleaned_complex.pdb \
+  --resname LIG \
+  --smiles "c1ccccc1" \
+  -o ligand_pose.sdf
+"""
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -64,7 +81,7 @@ def main():
     AllChem.EmbedMolecule(mol, randomSeed=2025)
 
     # 4) Map PDB heavy atoms -> RDKit heavy atoms
-    # For BNZ/MBN: using "attached H count" signature works well when PDB contains H coordinates.
+    # using "attached H count" signature works well when PDB contains H coordinates.
     # Compute PDB heavy atom attached-H count by proximity
     def count_attached_H(p_heavy, Hxyz, cutoff_A=1.25):
         if Hxyz.shape[0] == 0:
