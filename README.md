@@ -46,14 +46,13 @@ openmm-rbfe/
 conda env create -f env/environment.yml
 conda activate rbfe
 ---
+```
 
 ## Running hydration free energy
 ---
 ```bash
 python rbfe/run_hydration_absolute.py
 ```
----
-
 Outputs per-seed results and MBAR QC plots under:
 ```bash
 results/hydration_abs/
