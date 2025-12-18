@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Conda / venv
+.env
+.venv
+env/
+*.egg-info/
+
+# Results & outputs
+results/
+qc/
+*.csv
+*.json
+*.png
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
