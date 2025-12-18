@@ -51,17 +51,16 @@ conda activate rbfe
 ---
 ```bash
 python rbfe/run_hydration_absolute.py
-
+```
 ---
 
 Outputs per-seed results and MBAR QC plots under:
----
 ```bash
 results/hydration_abs/
 results/qc/
-
-## Running complex absolute free energy
+```
 ---
+## Running complex absolute free energy
 ```bash
 python rbfe/run_complex_absolute.py
-
+```
