@@ -46,3 +46,51 @@ def qc_path_for(qc_items: list[dict], ligand: str, seed: int) -> Path | None:
         if it["ligand"] == ligand and it["seed"] == seed:
             return it["path"]
     return None
+
+def summarize_ligand(lig_tag, qc_dir="results/qc", outdir="results"):
+    """
+    Run QC summarization programmatically and return (rows, mean, std, sem, out_csv)
+    instead of printing to console.
+    """
+    import glob
+    import numpy as np
+    import os
+    import csv
+
+    pattern = os.path.join(qc_dir, f"{lig_tag}_complex_seed*_mbar_qc.csv")
+    qc_files = sorted(glob.glob(pattern))
+
+    if not qc_files:
+        raise FileNotFoundError(f"No QC files found matching pattern: {pattern}")
+
+    rows = []  # (seed, dG, sem)
+    for path in qc_files:
+        basename = os.path.basename(path)
+        try:
+            after_seed = basename.split("seed", 1)[1]
+            seed_str = after_seed.split("_", 1)[0]
+            seed = int(seed_str)
+        except Exception:
+            raise RuntimeError(f"Could not parse seed from QC filename: {basename}")
+
+        # Reuse the existing function
+        dG_cum, dG_cum_err = extract_final_d_G_from_qc(path)
+        rows.append((seed, dG_cum, dG_cum_err))
+
+    dGs = np.array([r[1] for r in rows], dtype=float)
+    mean = float(dGs.mean())
+    std = float(dGs.std(ddof=1)) if len(dGs) > 1 else 0.0
+    sem = float(std / np.sqrt(len(dGs))) if len(dGs) > 1 else 0.0
+
+    os.makedirs(outdir, exist_ok=True)
+    out_csv = os.path.join(outdir, f"{lig_tag}_complex_summary_repeats_from_qc.csv")
+
+    with open(out_csv, "w") as f:
+        f.write("seed,dG_complex_kJmol,sem_kJmol\n")
+        for seed, dG, s in rows:
+            f.write(f"{seed},{dG:.6f},{s:.6f}\n")
+        f.write(f"MEAN,{mean:.6f},\n")
+        f.write(f"STD,{std:.6f},\n")
+        f.write(f"SEM,{sem:.6f},\n")
+
+    return rows, mean, std, sem, out_csv

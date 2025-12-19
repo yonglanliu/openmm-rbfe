@@ -31,67 +31,6 @@ from openmmforcefields.generators import GAFFTemplateGenerator
 
 from openmmtools.alchemy import AlchemicalRegion
 from pymbar import MBAR
-import argparse
-
-# -----------------------------
-#       Platform (CPU/GPU)
-# -----------------------------
-def select_platform_name(platform_arg: str) -> str:
-    """
-    Decide which OpenMM platform string to use.
-
-    - If platform_arg != "auto": return that (normalized).
-    - If platform_arg == "auto":
-        * If Slurm exposes a GPU and OpenMM CUDA/OpenCL is usable → return that
-        * Else configure CPU to use multiple threads and return "CPU"
-    """
-    platform_arg = platform_arg.strip()
-
-    # If user explicitly requested a platform, honor it
-    if platform_arg.lower() != "auto":
-        name = platform_arg.upper()
-        if name == "OPENCL":
-            return "OpenCL"
-        if name == "CUDA":
-            return "CUDA"
-        if name == "CPU":
-            # For explicit CPU, still configure multithreading
-            n_threads = int(
-                os.environ.get("SLURM_CPUS_PER_TASK", os.environ.get("OMP_NUM_THREADS", "1"))
-            )
-            cpu = mm.Platform.getPlatformByName("CPU")
-            cpu.setPropertyDefaultValue("Threads", str(n_threads))
-            print(f"[platform] Using CPU platform with {n_threads} threads (explicit CPU)")
-            return "CPU"
-        # Fallback: return as-is, user responsibility
-        print(f"[platform] Using explicit platform name: {name}")
-        return name
-
-    # AUTO mode
-    # Check if Slurm / environment says we have a GPU
-    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    has_gpu = cuda_visible not in ("", "none", "-1")
-
-    if has_gpu:
-        # Try CUDA first, then OpenCL
-        for name in ("CUDA", "OpenCL"):
-            try:
-                mm.Platform.getPlatformByName(name)
-                print(f"[platform] AUTO: using GPU platform {name} (CUDA_VISIBLE_DEVICES={cuda_visible})")
-                return name
-            except Exception:
-                continue
-
-        print("[platform] AUTO: GPU visible but CUDA/OpenCL platforms not usable, falling back to CPU.")
-
-    # Fallback: CPU with threads
-    n_threads = int(
-        os.environ.get("SLURM_CPUS_PER_TASK", os.environ.get("OMP_NUM_THREADS", "1"))
-    )
-    cpu = mm.Platform.getPlatformByName("CPU")
-    cpu.setPropertyDefaultValue("Threads", str(n_threads))
-    print(f"[platform] AUTO: using CPU platform with {n_threads} threads")
-    return "CPU"
 
 
 # -----------------------------
@@ -540,14 +479,7 @@ def save_mbar_qc(u_kln, N_k, kT_kJ_per_mol: float, schedule, out_prefix: str):
                     f"{dG_adj[i]:.6f},{dG_adj_err[i]:.6f},{dG_cum[i]:.6f},{dG_cum_err[i]:.6f}\n"
                 )
             else:
-                # Ensure exactly 9 columns always
-                f.write(
-                    f"{i},{le_i:.6f},{ls_i:.6f},"  # i, le_i, ls_i
-                    f",,"                          # le_ip1, ls_ip1 (empty)
-                    f",,"                          # dG_adj, dG_adj_err (empty)
-                    f"{dG_cum[i]:.6f},{dG_cum_err[i]:.6f}\n"
-                )
-
+                f.write(f"{i},{le_i:.6f},{ls_i:.6f},,,,{dG_cum[i]:.6f},{dG_cum_err[i]:.6f}\n")
 
     png_path = f"{out_prefix}_mbar_qc.png"
     x_adj = np.arange(K - 1)
@@ -725,7 +657,7 @@ def run_one_complex(
 
     return dG_kJ, dG_err_kJ
 
-"""
+
 def main():
     # ---- EDIT THESE 3 ----
     complex_pdb = "data/protein/4w53_fixed_keepMBN.pdb"
@@ -787,143 +719,5 @@ def main():
     print(f"Wrote: {out_csv}")
 
 
-if __name__ == "__main__":
-    main()
-"""
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Absolute complex-leg decoupling (protein-ligand complex) using OpenMM + alchemy + MBAR."
-    )
-
-    parser.add_argument(
-        "--pdb", "--complex_pdb",
-        dest="complex_pdb",
-        required=False,
-        default="data/protein/4w53_fixed_keepMBN.pdb",
-        help="Complex PDB file (protein + ligand).",
-    )
-    parser.add_argument(
-        "--ligand_sdf",
-        dest="ligand_sdf",
-        required=False,
-        default="data/ligands/MBN.sdf",
-        help="Ligand SDF file.",
-    )
-    parser.add_argument(
-        "--ligand_resname",
-        dest="ligand_resname",
-        required=False,
-        default="MBN",
-        help="Ligand residue name in the PDB.",
-    )
-    parser.add_argument(
-        "--outdir",
-        dest="outdir",
-        required=False,
-        default="results/complex_abs/MBN",
-        help="Output directory for complex-leg results.",
-    )
-
-    # You can pass --seed multiple times: --seed 2025 --seed 2026
-    parser.add_argument(
-        "--seed",
-        dest="seeds",
-        type=int,
-        action="append",
-        help="Random seed(s) for independent repeats. Can be given multiple times.",
-    )
-
-    parser.add_argument(
-        "--platform",
-        dest="platform",
-        default="auto",
-        choices=["auto", "CPU", "CUDA", "OpenCL"],
-        help=(
-            "OpenMM platform to use. "
-            "'auto' (default) uses GPU if available, otherwise multithreaded CPU."
-        ),
-    )
-
-    # Optional knobs if you want to expose them
-    parser.add_argument(
-        "--temperature_k",
-        type=float,
-        default=300.0,
-        help="Simulation temperature in Kelvin.",
-    )
-    parser.add_argument(
-        "--nsteps_eq_each",
-        type=int,
-        default=1500,
-        help="Number of equilibration steps per lambda window.",
-    )
-    parser.add_argument(
-        "--nsteps_prod_each",
-        type=int,
-        default=3000,
-        help="Number of production steps per lambda window.",
-    )
-    parser.add_argument(
-        "--sample_interval",
-        type=int,
-        default=200,
-        help="Sampling interval (steps) for MBAR snapshots.",
-    )
-
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-
-    complex_pdb = args.complex_pdb
-    ligand_sdf = args.ligand_sdf
-    ligand_resname = args.ligand_resname
-    outdir = args.outdir
-
-    # If no seeds passed, use default triplicate as before
-    if args.seeds is None:
-        seeds = [2025, 2026, 2027]
-    else:
-        seeds = args.seeds
-
-    # Build schedule (same as before)
-    schedule = make_decouple_schedule(n_elec=6, n_vdw=12)
-
-    # Decide actual OpenMM platform name (GPU vs CPU multithread)
-    platform_name = select_platform_name(args.platform)
-
-    rows = []
-    for seed in seeds:
-        print(f"\n===== SEED {seed} (platform={platform_name}) =====")
-        dG, sem = run_one_complex(
-            complex_pdb=complex_pdb,
-            ligand_sdf=ligand_sdf,
-            ligand_resname=ligand_resname,
-            outdir=outdir,
-            platform=platform_name,
-            schedule=schedule,
-            random_seed=seed,
-            do_qc=True,
-            # runtime knobs (stable defaults, some exposed via argparse)
-            temperature_k=args.temperature_k,
-            friction_per_ps=20.0,
-            step_fs=0.25,
-            nsteps_eq_each=args.nsteps_eq_each,
-            nsteps_prod_each=args.nsteps_prod_each,
-            sample_interval=args.sample_interval,
-            # build knobs
-            padding_nm=1.2,
-            constraints_mode="HBonds",
-            # restraint knobs
-            restraint_k_kJ_per_mol_nm2=2000.0,
-            restraint_r0_nm=None,
-        )
-        print(f"ΔG_complex = {dG:.3f} ± {sem:.3f} kJ/mol")
-        rows.append((seed, dG, sem))
-    
-    import tools/summarize_complex_from_qc
-    
 if __name__ == "__main__":
     main()

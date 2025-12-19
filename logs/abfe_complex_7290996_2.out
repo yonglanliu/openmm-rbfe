@@ -1,0 +1,54 @@
+SLURM_ARRAY_TASK_ID=2
+Using SEED=2027
+Detected CUDA_VISIBLE_DEVICES='0'
+Running on platform=auto
+[platform] AUTO: using GPU platform CUDA (CUDA_VISIBLE_DEVICES=0)
+
+===== SEED 2027 (platform=CUDA) =====
+DEBUG pre-min pos finite: True max|pos|: 6.546121575469982
+DEBUG pre-min energy (kJ/mol): -2.448e+05
+DEBUG post-min: E(kJ/mol)=-648732.285  pos_finite=True  max|pos|=6.659 nm
+DEBUG lambda params: ['lambda_electrostatics', 'lambda_sterics']
+DEBUG equil le=1.000 ls=1.000
+DEBUG production le=1.000 ls=1.000  samples=15
+DEBUG equil le=0.800 ls=1.000
+DEBUG production le=0.800 ls=1.000  samples=15
+DEBUG equil le=0.600 ls=1.000
+DEBUG production le=0.600 ls=1.000  samples=15
+DEBUG equil le=0.400 ls=1.000
+DEBUG production le=0.400 ls=1.000  samples=15
+DEBUG equil le=0.200 ls=1.000
+DEBUG production le=0.200 ls=1.000  samples=15
+DEBUG equil le=0.000 ls=1.000
+DEBUG production le=0.000 ls=1.000  samples=15
+DEBUG equil le=0.000 ls=0.909
+DEBUG production le=0.000 ls=0.909  samples=15
+DEBUG equil le=0.000 ls=0.818
+DEBUG production le=0.000 ls=0.818  samples=15
+DEBUG equil le=0.000 ls=0.727
+DEBUG production le=0.000 ls=0.727  samples=15
+DEBUG equil le=0.000 ls=0.636
+DEBUG production le=0.000 ls=0.636  samples=15
+DEBUG equil le=0.000 ls=0.545
+DEBUG production le=0.000 ls=0.545  samples=15
+DEBUG equil le=0.000 ls=0.455
+DEBUG production le=0.000 ls=0.455  samples=15
+DEBUG equil le=0.000 ls=0.364
+DEBUG production le=0.000 ls=0.364  samples=15
+DEBUG equil le=0.000 ls=0.273
+DEBUG production le=0.000 ls=0.273  samples=15
+DEBUG equil le=0.000 ls=0.182
+DEBUG production le=0.000 ls=0.182  samples=15
+DEBUG equil le=0.000 ls=0.091
+DEBUG production le=0.000 ls=0.091  samples=15
+DEBUG equil le=0.000 ls=0.000
+DEBUG production le=0.000 ls=0.000  samples=15
+Wrote QC CSV:   results/qc/MBN_complex_seed2027_mbar_qc.csv
+Wrote QC plots: results/qc/MBN_complex_seed2027_mbar_qc.png and results/qc/MBN_complex_seed2027_mbar_qc_cum.png
+ΔG_complex = 58.069 ± 1.516 kJ/mol
+
+===== REPEATS SUMMARY =====
+ΔG mean = 58.069 kJ/mol
+ΔG std  = 0.000 kJ/mol
+ΔG SEM  = 0.000 kJ/mol
+Wrote: results/complex_summary_repeats.csv

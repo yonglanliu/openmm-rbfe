@@ -509,11 +509,11 @@ def run_one_ligand(
 
 
 def main():
-    ligA = "data/ligands/ligA.sdf"
-    ligB = "data/ligands/ligB.sdf"
+    ligA = "data/ligands/BNZ.sdf"
+    ligB = "data/ligands/MBN.sdf"
 
-    outA = "results/hydration_abs/ligA"
-    outB = "results/hydration_abs/ligB"
+    outA = "results/hydration_abs/BNZ"
+    outB = "results/hydration_abs/MBN"
 
     seeds = [2025, 2026, 2027]
 
