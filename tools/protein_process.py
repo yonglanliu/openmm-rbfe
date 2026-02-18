@@ -12,13 +12,13 @@ This utility cleans and standardizes a protein–ligand PDB for downstream MD/FE
 """
 """
 Usage example:
-python tools/fix_pdb_keep_ligand.py \
+python tools/protein_process.py \
         -i data/pdb/[PDBid].pdb \
         -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
         --keep_resname [ligand Resname] \
   
 Choose the correct ligand when multiple copies exist:
-python tools/fix_pdb_keep_ligand.py \
+python tools/protein_process.py \
         -i data/pdb/[PDBid].pdb \
         -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
         --keep_resname [ligand Resname] \
@@ -28,21 +28,21 @@ python tools/fix_pdb_keep_ligand.py \
 Keep waters and/or common ions:
 By default, crystallographic waters and common ions are removed. Use flags to keep them:
 # Keep waters:
-python tools/fix_pdb_keep_ligand.py \
+python tools/protein_process.py \
       -i data/pdb/[PDBid].pdb \
       -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
       --keep_resname [ligand Resname] \
       --keep_water
 
 # Keep ions:
-python tools/fix_pdb_keep_ligand.py \
+python tools/protein_process.py \
       -i data/pdb/[PDBid].pdb \
       -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
       --keep_resname [ligand Resname] \
       --keep_ions
 
 # Keep both waters and ions:
-python tools/fix_pdb_keep_ligand.py \
+python tools/protein_process.py \
       -i data/pdb/[PDBid].pdb \
       -o data/protein/[PDBid]_fixed_keep[ligand Resname].pdb \
         --keep_resname [ligand Resname] \
